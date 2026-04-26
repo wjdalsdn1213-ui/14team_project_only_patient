@@ -1,8 +1,7 @@
-const sliderImage = document.getElementById("sliderImage");
-const prevBtn = document.getElementById("prevBtn");
-const nextBtn = document.getElementById("nextBtn");
-const imageUpload = document.getElementById("imageUpload");
-const slideStatus = document.getElementById("slideStatus");
+const sliderFrame = document.querySelector(".slider-frame");
+const sliderImageCurrent = document.getElementById("sliderImageCurrent");
+const sliderImageNext = document.getElementById("sliderImageNext");
+const slideIndicator = document.getElementById("slideIndicator");
 const noticeForm = document.getElementById("noticeForm");
 const noticeInput = document.getElementById("noticeInput");
 const noticeList = document.getElementById("noticeList");
@@ -13,40 +12,68 @@ const idInput = document.getElementById("idInput");
 const pwInput = document.getElementById("pwInput");
 
 let images = [
-  "https://picsum.photos/900/450?random=1",
-  "https://picsum.photos/900/450?random=2",
-  "https://picsum.photos/900/450?random=3",
+  "assets/slide1.jpg",
+  "assets/slide2.png",
+  "assets/slide3.png",
 ];
 let currentIndex = 0;
+const AUTO_SLIDE_INTERVAL_MS = 3000;
+const SLIDE_ANIMATION_MS = 450;
+let isAnimating = false;
+let indicatorDots = [];
+
+function setupIndicator() {
+  if (!slideIndicator) return;
+  slideIndicator.innerHTML = "";
+  indicatorDots = images.map((_, index) => {
+    const dot = document.createElement("span");
+    dot.className = "slide-dot";
+    dot.setAttribute("data-index", String(index));
+    slideIndicator.appendChild(dot);
+    return dot;
+  });
+}
 
 function renderSlide() {
-  sliderImage.src = images[currentIndex];
-  slideStatus.textContent = `${currentIndex + 1} / ${images.length}`;
+  sliderImageCurrent.src = images[currentIndex];
+  indicatorDots.forEach((dot, index) => {
+    dot.classList.toggle("active", index === currentIndex);
+  });
+}
+
+function moveSlide(direction) {
+  if (isAnimating || images.length <= 1) {
+    return;
+  }
+
+  isAnimating = true;
+  const nextIndex =
+    direction === "next"
+      ? (currentIndex + 1) % images.length
+      : (currentIndex - 1 + images.length) % images.length;
+
+  sliderImageNext.src = images[nextIndex];
+  sliderImageNext.style.transform =
+    direction === "next" ? "translateX(100%)" : "translateX(-100%)";
+  sliderFrame.classList.add(direction === "next" ? "animating-next" : "animating-prev");
+
+  setTimeout(() => {
+    currentIndex = nextIndex;
+    sliderImageCurrent.src = images[currentIndex];
+    sliderFrame.classList.remove("animating-next", "animating-prev");
+    sliderImageCurrent.style.transform = "translateX(0)";
+    sliderImageNext.style.transform = "translateX(100%)";
+    renderSlide();
+    isAnimating = false;
+  }, SLIDE_ANIMATION_MS);
 }
 
 function showPrevious() {
-  currentIndex = (currentIndex - 1 + images.length) % images.length;
-  renderSlide();
+  moveSlide("prev");
 }
 
 function showNext() {
-  currentIndex = (currentIndex + 1) % images.length;
-  renderSlide();
-}
-
-function addUploadedImages(event) {
-  const files = Array.from(event.target.files || []);
-  if (files.length === 0) return;
-
-  const uploadedUrls = files
-    .filter((file) => file.type.startsWith("image/"))
-    .map((file) => URL.createObjectURL(file));
-
-  if (uploadedUrls.length === 0) return;
-
-  images = [...images, ...uploadedUrls];
-  currentIndex = images.length - uploadedUrls.length;
-  renderSlide();
+  moveSlide("next");
 }
 
 function addNotice(event) {
@@ -119,9 +146,6 @@ function tryLogin() {
   alert("ID 또는 PW가 올바르지 않습니다.");
 }
 
-prevBtn.addEventListener("click", showPrevious);
-nextBtn.addEventListener("click", showNext);
-imageUpload.addEventListener("change", addUploadedImages);
 noticeForm.addEventListener("submit", addNotice);
 loginBtn.addEventListener("click", tryLogin);
 pwInput.addEventListener("keydown", (event) => {
@@ -130,5 +154,7 @@ pwInput.addEventListener("keydown", (event) => {
   }
 });
 
+setupIndicator();
 renderSlide();
+setInterval(showNext, AUTO_SLIDE_INTERVAL_MS);
 initializeRehabMap();
