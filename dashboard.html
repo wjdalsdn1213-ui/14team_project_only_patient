@@ -250,6 +250,92 @@
         color: #4b5563;
       }
 
+      .pose-analysis-box {
+        margin: 20px 0 0;
+        padding: 20px;
+        border: 1px solid #e5e7eb;
+        background: #f8fafc;
+        text-align: left;
+      }
+
+      .pose-analysis-title {
+        margin: 0 0 10px;
+        font-size: 18px;
+        color: #111827;
+      }
+
+      .pose-analysis-help {
+        margin: 0 0 12px;
+        font-size: 13px;
+        color: #4b5563;
+      }
+
+      .pose-upload-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .pose-file-input {
+        max-width: 320px;
+      }
+
+      .pose-status {
+        margin: 0;
+        font-size: 13px;
+        color: #374151;
+      }
+
+      .pose-viewer {
+        position: relative;
+        width: 100%;
+        max-width: 560px;
+        border: 1px solid #d1d5db;
+        background: #000000;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .pose-video {
+        width: 100%;
+        display: block;
+      }
+
+      .pose-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+
+      .pose-summary {
+        margin-top: 12px;
+        padding: 12px;
+        border: 1px solid #dbeafe;
+        border-radius: 10px;
+        background: #ffffff;
+      }
+
+      .pose-summary.is-hidden {
+        display: none;
+      }
+
+      .pose-summary-title {
+        margin: 0 0 8px;
+        font-size: 15px;
+        color: #1f2937;
+      }
+
+      .pose-summary-list {
+        margin: 0;
+        padding-left: 18px;
+        color: #374151;
+        font-size: 14px;
+      }
+
       @media (max-width: 520px) {
         .workout-card-list {
           grid-template-columns: 1fr;
@@ -299,7 +385,32 @@
         <div id="calendarGrid" class="calendar-grid"></div>
         <p class="calendar-help">날짜를 클릭하면 출석 체크/해제가 됩니다.</p>
       </section>
+      <section class="pose-analysis-box" aria-label="영상 자세 분석">
+        <h2 class="pose-analysis-title">영상 자세 분석</h2>
+        <p class="pose-analysis-help">
+          스쿼트 등 운동 영상을 올리면 재생 중 랜드마크가 표시되고 종료 후 분석 결과가 요약됩니다.
+        </p>
+        <div class="pose-upload-row">
+          <input
+            id="poseVideoInput"
+            class="pose-file-input"
+            type="file"
+            accept="video/*"
+          />
+          <p id="poseStatus" class="pose-status">영상을 업로드해 주세요.</p>
+        </div>
+        <div class="pose-viewer">
+          <video id="poseVideo" class="pose-video" controls playsinline></video>
+          <canvas id="poseCanvas" class="pose-canvas"></canvas>
+        </div>
+        <section id="poseSummaryBox" class="pose-summary is-hidden" aria-live="polite">
+          <h3 class="pose-summary-title">분석 요약</h3>
+          <ul id="poseSummaryList" class="pose-summary-list"></ul>
+        </section>
+      </section>
     </section>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <script>
       const workoutCards = document.querySelectorAll(".workout-card");
       const workoutTimerBox = document.getElementById("workoutTimerBox");
@@ -312,16 +423,255 @@
       const nextMonthBtn = document.getElementById("nextMonthBtn");
       const calendarMonthLabel = document.getElementById("calendarMonthLabel");
       const calendarGrid = document.getElementById("calendarGrid");
+      const poseVideoInput = document.getElementById("poseVideoInput");
+      const poseVideo = document.getElementById("poseVideo");
+      const poseCanvas = document.getElementById("poseCanvas");
+      const poseStatus = document.getElementById("poseStatus");
+      const poseSummaryBox = document.getElementById("poseSummaryBox");
+      const poseSummaryList = document.getElementById("poseSummaryList");
+      const poseCanvasCtx = poseCanvas.getContext("2d");
 
       const TOTAL_SECONDS = 10 * 60;
       const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
       const ATTENDANCE_STORAGE_KEY = "rehabAttendanceByMonth";
+      const KNEE_VISIBILITY_THRESHOLD = 0.45;
       let selectedWorkoutCard = null;
       let timerId = null;
       let remainingSeconds = TOTAL_SECONDS;
       let isRunning = false;
       let currentCalendarDate = new Date();
       const attendanceByMonth = {};
+      let pose = null;
+      let poseObjectUrl = "";
+      let animationFrameId = null;
+      let isPoseFrameProcessing = false;
+      let squatState = "up";
+      const poseStats = {
+        totalFrames: 0,
+        detectedFrames: 0,
+        squatCount: 0,
+        minKneeAngle: 180,
+        maxKneeAngle: 0,
+      };
+
+      function resetPoseStats() {
+        poseStats.totalFrames = 0;
+        poseStats.detectedFrames = 0;
+        poseStats.squatCount = 0;
+        poseStats.minKneeAngle = 180;
+        poseStats.maxKneeAngle = 0;
+        squatState = "up";
+      }
+
+      function toScreenPoint(point) {
+        return {
+          x: point.x * poseCanvas.width,
+          y: point.y * poseCanvas.height,
+        };
+      }
+
+      function calculateAngle(pointA, pointB, pointC) {
+        const abx = pointA.x - pointB.x;
+        const aby = pointA.y - pointB.y;
+        const cbx = pointC.x - pointB.x;
+        const cby = pointC.y - pointB.y;
+        const dot = abx * cbx + aby * cby;
+        const abLength = Math.hypot(abx, aby);
+        const cbLength = Math.hypot(cbx, cby);
+        if (abLength === 0 || cbLength === 0) return 180;
+        const cosine = Math.min(1, Math.max(-1, dot / (abLength * cbLength)));
+        return (Math.acos(cosine) * 180) / Math.PI;
+      }
+
+      function getAverageKneeAngle(landmarks) {
+        const leftHip = landmarks[23];
+        const leftKnee = landmarks[25];
+        const leftAnkle = landmarks[27];
+        const rightHip = landmarks[24];
+        const rightKnee = landmarks[26];
+        const rightAnkle = landmarks[28];
+
+        const leftVisible =
+          leftHip.visibility > KNEE_VISIBILITY_THRESHOLD &&
+          leftKnee.visibility > KNEE_VISIBILITY_THRESHOLD &&
+          leftAnkle.visibility > KNEE_VISIBILITY_THRESHOLD;
+        const rightVisible =
+          rightHip.visibility > KNEE_VISIBILITY_THRESHOLD &&
+          rightKnee.visibility > KNEE_VISIBILITY_THRESHOLD &&
+          rightAnkle.visibility > KNEE_VISIBILITY_THRESHOLD;
+
+        if (!leftVisible && !rightVisible) {
+          return null;
+        }
+
+        let total = 0;
+        let count = 0;
+        if (leftVisible) {
+          const leftAngle = calculateAngle(
+            toScreenPoint(leftHip),
+            toScreenPoint(leftKnee),
+            toScreenPoint(leftAnkle)
+          );
+          total += leftAngle;
+          count += 1;
+        }
+        if (rightVisible) {
+          const rightAngle = calculateAngle(
+            toScreenPoint(rightHip),
+            toScreenPoint(rightKnee),
+            toScreenPoint(rightAnkle)
+          );
+          total += rightAngle;
+          count += 1;
+        }
+        return count > 0 ? total / count : null;
+      }
+
+      function updateSquatCounter(avgKneeAngle) {
+        if (avgKneeAngle === null) return;
+        poseStats.minKneeAngle = Math.min(poseStats.minKneeAngle, avgKneeAngle);
+        poseStats.maxKneeAngle = Math.max(poseStats.maxKneeAngle, avgKneeAngle);
+
+        if (squatState === "up" && avgKneeAngle < 100) {
+          squatState = "down";
+          return;
+        }
+        if (squatState === "down" && avgKneeAngle > 155) {
+          squatState = "up";
+          poseStats.squatCount += 1;
+        }
+      }
+
+      function renderPoseSummary() {
+        const detectionRate =
+          poseStats.totalFrames === 0
+            ? 0
+            : (poseStats.detectedFrames / poseStats.totalFrames) * 100;
+        const hasAngleData = poseStats.detectedFrames > 0;
+        const kneeRange = hasAngleData ? poseStats.maxKneeAngle - poseStats.minKneeAngle : 0;
+        const minAngleText =
+          hasAngleData ? `${poseStats.minKneeAngle.toFixed(1)}도` : "데이터 없음";
+        const maxAngleText =
+          hasAngleData ? `${poseStats.maxKneeAngle.toFixed(1)}도` : "데이터 없음";
+
+        function getPostureGrade() {
+          if (!hasAngleData || detectionRate < 45) {
+            return "주의 (데이터 부족)";
+          }
+
+          if (
+            detectionRate >= 75 &&
+            poseStats.minKneeAngle <= 105 &&
+            kneeRange >= 45
+          ) {
+            return "우수";
+          }
+
+          if (
+            detectionRate >= 60 &&
+            poseStats.minKneeAngle <= 125 &&
+            kneeRange >= 30
+          ) {
+            return "보통";
+          }
+
+          return "주의";
+        }
+
+        const postureGrade = getPostureGrade();
+
+        poseSummaryList.innerHTML = `
+          <li>추정 스쿼트 횟수: ${poseStats.squatCount}회</li>
+          <li>최저 무릎 각도: ${minAngleText}</li>
+          <li>최고 무릎 각도: ${maxAngleText}</li>
+          <li>랜드마크 감지율: ${detectionRate.toFixed(1)}%</li>
+          <li>자세 정확도 등급: ${postureGrade}</li>
+        `;
+        poseSummaryBox.classList.remove("is-hidden");
+      }
+
+      function clearPoseCanvas() {
+        poseCanvasCtx.clearRect(0, 0, poseCanvas.width, poseCanvas.height);
+      }
+
+      function stopPoseLoop() {
+        if (animationFrameId !== null) {
+          cancelAnimationFrame(animationFrameId);
+          animationFrameId = null;
+        }
+        isPoseFrameProcessing = false;
+      }
+
+      function resizePoseCanvas() {
+        const width = poseVideo.videoWidth || poseVideo.clientWidth;
+        const height = poseVideo.videoHeight || poseVideo.clientHeight;
+        if (!width || !height) return;
+        poseCanvas.width = width;
+        poseCanvas.height = height;
+      }
+
+      async function processPoseFrame() {
+        if (!pose || poseVideo.paused || poseVideo.ended) return;
+
+        if (isPoseFrameProcessing) {
+          animationFrameId = requestAnimationFrame(processPoseFrame);
+          return;
+        }
+
+        isPoseFrameProcessing = true;
+        try {
+          await pose.send({ image: poseVideo });
+        } catch (error) {
+          poseStatus.textContent = "랜드마크 분석 중 오류가 발생했습니다.";
+          stopPoseLoop();
+        } finally {
+          isPoseFrameProcessing = false;
+        }
+
+        if (!poseVideo.paused && !poseVideo.ended) {
+          animationFrameId = requestAnimationFrame(processPoseFrame);
+        }
+      }
+
+      function setPoseStatus(text) {
+        poseStatus.textContent = text;
+      }
+
+      async function initializePose() {
+        if (pose) return pose;
+        pose = new window.Pose({
+          locateFile: (file) =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+        });
+        pose.setOptions({
+          modelComplexity: 1,
+          smoothLandmarks: true,
+          enableSegmentation: false,
+          minDetectionConfidence: 0.55,
+          minTrackingConfidence: 0.55,
+        });
+        pose.onResults((results) => {
+          clearPoseCanvas();
+          poseStats.totalFrames += 1;
+          if (!results.poseLandmarks) return;
+
+          poseStats.detectedFrames += 1;
+          window.drawConnectors(
+            poseCanvasCtx,
+            results.poseLandmarks,
+            window.POSE_CONNECTIONS,
+            { color: "#00e5ff", lineWidth: 3 }
+          );
+          window.drawLandmarks(poseCanvasCtx, results.poseLandmarks, {
+            color: "#22c55e",
+            lineWidth: 1,
+            radius: 4,
+          });
+          const avgKneeAngle = getAverageKneeAngle(results.poseLandmarks);
+          updateSquatCounter(avgKneeAngle);
+        });
+        return pose;
+      }
 
       function formatTime(seconds) {
         const minute = String(Math.floor(seconds / 60)).padStart(2, "0");
@@ -534,6 +884,59 @@
           1
         );
         renderCalendar(currentCalendarDate);
+      });
+
+      poseVideoInput.addEventListener("change", async (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+
+        stopPoseLoop();
+        clearPoseCanvas();
+        poseSummaryBox.classList.add("is-hidden");
+        poseSummaryList.innerHTML = "";
+        resetPoseStats();
+
+        if (poseObjectUrl) {
+          URL.revokeObjectURL(poseObjectUrl);
+          poseObjectUrl = "";
+        }
+
+        poseObjectUrl = URL.createObjectURL(file);
+        poseVideo.src = poseObjectUrl;
+        setPoseStatus("영상 로드 중입니다...");
+
+        try {
+          await initializePose();
+        } catch (error) {
+          setPoseStatus("분석 엔진 초기화에 실패했습니다.");
+        }
+      });
+
+      poseVideo.addEventListener("loadedmetadata", () => {
+        resizePoseCanvas();
+        setPoseStatus("재생하면 랜드마크 분석이 시작됩니다.");
+      });
+
+      poseVideo.addEventListener("play", () => {
+        resetPoseStats();
+        poseSummaryBox.classList.add("is-hidden");
+        poseSummaryList.innerHTML = "";
+        resizePoseCanvas();
+        setPoseStatus("영상 재생 중... 랜드마크 분석 중입니다.");
+        stopPoseLoop();
+        animationFrameId = requestAnimationFrame(processPoseFrame);
+      });
+
+      poseVideo.addEventListener("pause", () => {
+        if (poseVideo.ended) return;
+        stopPoseLoop();
+        setPoseStatus("일시정지됨. 다시 재생하면 분석을 이어갑니다.");
+      });
+
+      poseVideo.addEventListener("ended", () => {
+        stopPoseLoop();
+        setPoseStatus("영상 분석이 완료되었습니다.");
+        renderPoseSummary();
       });
 
       loadAttendanceFromStorage();
