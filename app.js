@@ -1,6 +1,5 @@
 const sliderFrame = document.querySelector(".slider-frame");
 const sliderImageCurrent = document.getElementById("sliderImageCurrent");
-const sliderImageNext = document.getElementById("sliderImageNext");
 const slideIndicator = document.getElementById("slideIndicator");
 const noticeForm = document.getElementById("noticeForm");
 const noticeInput = document.getElementById("noticeInput");
@@ -18,8 +17,6 @@ let images = [
 ];
 let currentIndex = 0;
 const AUTO_SLIDE_INTERVAL_MS = 3000;
-const SLIDE_ANIMATION_MS = 450;
-let isAnimating = false;
 let indicatorDots = [];
 
 function setupIndicator() {
@@ -42,30 +39,15 @@ function renderSlide() {
 }
 
 function moveSlide(direction) {
-  if (isAnimating || images.length <= 1) {
+  if (images.length <= 1) {
     return;
   }
-
-  isAnimating = true;
   const nextIndex =
     direction === "next"
       ? (currentIndex + 1) % images.length
       : (currentIndex - 1 + images.length) % images.length;
-
-  sliderImageNext.src = images[nextIndex];
-  sliderImageNext.style.transform =
-    direction === "next" ? "translateX(100%)" : "translateX(-100%)";
-  sliderFrame.classList.add(direction === "next" ? "animating-next" : "animating-prev");
-
-  setTimeout(() => {
-    currentIndex = nextIndex;
-    sliderImageCurrent.src = images[currentIndex];
-    sliderFrame.classList.remove("animating-next", "animating-prev");
-    sliderImageCurrent.style.transform = "translateX(0)";
-    sliderImageNext.style.transform = "translateX(100%)";
-    renderSlide();
-    isAnimating = false;
-  }, SLIDE_ANIMATION_MS);
+  currentIndex = nextIndex;
+  renderSlide();
 }
 
 function showPrevious() {
